@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#7357d8">
+<title>Baby Translator</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f7f5ff;color:#24222c}
+main{max-width:520px;margin:auto;padding:28px 20px 50px}
+.hero{text-align:center;padding:20px 0}
+.logo{font-size:55px}
+h1{font-size:34px;margin:8px 0 5px}
+.sub{color:#6d6878;line-height:1.4}
+.card{background:white;border-radius:24px;padding:20px;margin:16px 0;box-shadow:0 5px 25px #6046a414}
+.listen{display:block;width:190px;height:190px;margin:25px auto;border:0;border-radius:50%;background:#7357d8;color:white;font-size:23px;font-weight:700;box-shadow:0 12px 35px #7357d855}
+.listen:active{transform:scale(.97)}
+.listen.recording{background:#d65368}
+.status{text-align:center;min-height:26px;font-weight:600}
+.meter{height:10px;background:#ebe8f3;border-radius:10px;overflow:hidden;margin:15px 0}
+.meter div{height:100%;width:0;background:#7357d8;transition:.08s}
+.results{display:none}
+.result{padding:15px;margin:10px 0;background:#f6f3ff;border-radius:16px}
+.row{display:flex;justify-content:space-between;gap:10px;font-weight:700}
+.bar{height:7px;background:#e5e0f4;border-radius:8px;margin-top:9px;overflow:hidden}
+.bar div{height:100%;background:#7357d8}
+.explain{font-size:14px;color:#666;margin-top:7px}
+.feedback{display:none}
+.feedback button{width:100%;padding:14px;margin:5px 0;border:1px solid #ddd6f3;background:white;border-radius:14px;font-size:16px;text-align:left}
+.small{font-size:13px;color:#777;line-height:1.45}
+.personal{background:#eee9ff;border-radius:15px;padding:12px;margin-top:12px}
+</style>
+</head>
+
+<body>
+<main>
+<div class="hero">
+<div class="logo">👶🏻</div>
+<h1>Baby Translator</h1>
+<div class="sub">Listen to a cry and get a best-match to the five Dunstan baby sounds.</div>
+</div>
+
+<div class="card">
+<button id="listen" class="listen">🎙️<br>Listen</button>
+<div id="status" class="status">Tap Listen when you hear the cry starting</div>
+<div class="meter"><div id="level"></div></div>
+<div class="small" style="text-align:center">Best with early fussing / pre-cry sounds before the cry becomes intense.</div>
+</div>
+
+<div id="results" class="card results">
+<h2 style="margin-top:0">What it sounds like</h2>
+<div id="resultList"></div>
+<div id="personal" class="personal"></div>
+</div>
+
+<div id="feedback" class="card feedback">
+<h2 style="margin-top:0">What actually helped?</h2>
+<div class="small">This is how Baby Translator starts learning your baby's patterns.</div><br>
+<button onclick="saveOutcome('Fed / hungry')">🍼 Fed / hungry</button>
+<button onclick="saveOutcome('Burped')">💨 Burped</button>
+<button onclick="saveOutcome('Went to sleep')">😴 Went to sleep</button>
+<button onclick="saveOutcome('Wind / poo')">💩 Wind / poo</button>
+<button onclick="saveOutcome('Changed / repositioned')">🧷 Changed / repositioned</button>
+<button onclick="saveOutcome('None of these')">🤷 None of these</button>
+</div>
+
+<div class="card">
+<strong>How the sounds are interpreted</strong>
+<p class="small">
+<b>Neh</b> — hunger<br>
+<b>Owh</b> — tired / sleepy<br>
+<b>Eh</b> — needs burping<br>
+<b>Eairh</b> — lower wind / tummy discomfort<br>
+<b>Heh</b> — general discomfort
+</p>
+</div>
+
+<p class="small" style="text-align:center">
+Baby Translator is an experimental aid, not a medical device or diagnosis. If your baby seems unwell, use normal medical advice regardless of the result.
+</p>
+</main>
+
+<script>
+const btn=document.getElementById("listen");
+const statusEl=document.getElementById("status");
+const meter=document.getElementById("level");
+const resultsEl=document.getElementById("results");
+const resultList=document.getElementById("resultList");
+const feedback=document.getElementById("feedback");
+const personal=document.getElementById("personal");
+
+let stream,recorder,chunks=[],audioCtx,analyser,timer,currentFeatures,currentGuess;
+
+const meanings={
+"Neh":"Hungry",
+"Owh":"Tired / sleepy",
+"Eh":"Needs burping",
+"Eairh":"Lower wind / tummy discomfort",
+"Heh":"General discomfort"
+};
+
+btn.onclick=async()=>{
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({audio:true});
+  chunks=[];
+  recorder=new MediaRecorder(stream);
+  recorder.ondataavailable=e=>chunks.push(e.data);
+  recorder.onstop=analyse;
+  recorder.start();
+
+  audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  const source=audioCtx.createMediaStreamSource(stream);
+  analyser=audioCtx.createAnalyser();
+  analyser.fftSize=512;
+  source.connect(analyser);
+
+  btn.classList.add("recording");
+  btn.innerHTML="🔴<br>Listening…";
+  statusEl.textContent="Listening for 6 seconds…";
+  resultsEl.style.display="none";
+  feedback.style.display="none";
+
+  animateMeter();
+  timer=setTimeout(stopRecording,6000);
+ }catch(e){
+  statusEl.textContent="Microphone access is needed. Please allow the microphone and try again.";
+ }
+};
+
+function animateMeter(){
+ if(!recorder||recorder.state!=="recording")return;
+ const d=new Uint8Array(analyser.frequencyBinCount);
+ analyser.getByteFrequencyData(d);
+ let avg=d.reduce((a,b)=>a+b,0)/d.length;
+ meter.style.width=Math.min(100,avg*1.5)+"%";
+ requestAnimationFrame(animateMeter);
+}
+
+function stopRecording(){
+ if(recorder&&recorder.state==="recording")recorder.stop();
+ if(stream)stream.getTracks().forEach(t=>t.stop());
+ btn.classList.remove("recording");
+ btn.innerHTML="🎙️<br>Listen again";
+ meter.style.width="0";
+ statusEl.textContent="Analysing the sound…";
+}
+
+async function analyse(){
+ try{
+  const blob=new Blob(chunks,{type:recorder.mimeType});
+  const buffer=await blob.arrayBuffer();
+  const ctx=new (window.AudioContext||window.webkitAudioContext)();
+  const audio=await ctx.decodeAudioData(buffer);
+  const data=audio.getChannelData(0);
+
+  let rms=0,zcr=0,peak=0;
+  for(let i=0;i<data.length;i++){
+   rms+=data[i]*data[i];
+   peak=Math.max(peak,Math.abs(data[i]));
+   if(i>0&&((data[i]>=0)!=(data[i-1]>=0)))zcr++;
+  }
+  rms=Math.sqrt(rms/data.length);
+  zcr=zcr/data.length;
+
+  const frame=Math.max(256,Math.floor(audio.sampleRate*.04));
+  let env=[];
+  for(let i=0;i<data.length-frame;i+=frame){
+   let x=0;
+   for(let j=0;j<frame;j++)x+=data[i+j]*data[i+j];
+   env.push(Math.sqrt(x/frame));
+  }
+
+  const mean=env.reduce((a,b)=>a+b,0)/(env.length||1);
+  const variance=env.reduce((a,b)=>a+(b-mean)**2,0)/(env.length||1);
+  const variability=Math.sqrt(variance);
+
+  let bursts=0;
+  const threshold=mean*1.35;
+  let above=false;
+  env.forEach(v=>{
+   if(v>threshold&&!above){bursts++;above=true}
+   if(v<mean)above=false;
+  });
+
+  currentFeatures={rms,zcr,peak,variability,bursts};
+
+  let scores={
+   "Neh":1.1 + variability*10 + (bursts>=2?0.35:0),
+   "Owh":1.15 + Math.max(0,.12-zcr)*5 + (bursts<=2?.3:0),
+   "Eh":1.05 + zcr*5 + (bursts>=2&&bursts<=5?.35:0),
+   "Eairh":1.0 + variability*12 + (bursts>=4?.45:0),
+   "Heh":1.05 + zcr*3 + variability*6
+  };
+
+  applyPersonalLearning(scores,currentFeatures);
+
+  const vals=Object.values(scores);
+  const exps=vals.map(v=>Math.exp(v));
+  const total=exps.reduce((a,b)=>a+b,0);
+
+  let ranked=Object.keys(scores).map((name,i)=>({
+   name,
+   p:exps[i]/total
+  })).sort((a,b)=>b.p-a.p);
+
+  currentGuess=ranked[0].name;
+  showResults(ranked);
+  ctx.close();
+ }catch(e){
+  statusEl.textContent="I couldn't analyse that recording. Tap Listen and try again.";
+ }
+}
+
+function showResults(ranked){
+ statusEl.textContent="Analysis complete";
+ resultList.innerHTML="";
+ ranked.forEach((r,i)=>{
+  const pct=Math.round(r.p*100);
+  const div=document.createElement("div");
+  div.className="result";
+  div.innerHTML=
+   '<div class="row"><span>'+(i===0?'⭐ ':'')+r.name+' — '+meanings[r.name]+'</span><span>'+pct+'%</span></div>'+
+   '<div class="bar"><div style="width:'+pct+'%"></div></div>'+
+   (i===0?'<div class="explain">Best sound match from this recording</div>':'');
+  resultList.appendChild(div);
+ });
+ resultsEl.style.display="block";
+ feedback.style.display="block";
+
+ const history=getHistory();
+ if(history.length<4){
+  personal.innerHTML="🧠 <b>Personal learning:</b> "+history.length+
+  " confirmed example"+(history.length===1?"":"s")+
+  ". After a few examples, your baby's own history will start influencing future results.";
+ }else{
+  personal.innerHTML="🧠 <b>Personal learning active.</b> Using "+history.length+
+  " previous confirmed examples alongside the sound analysis.";
+ }
+ resultsEl.scrollIntoView({behavior:"smooth"});
+}
+
+function getHistory(){
+ try{return JSON.parse(localStorage.getItem("babyTranslatorHistory")||"[]")}
+ catch(e){return[]}
+}
+
+function applyPersonalLearning(scores,f){
+ const h=getHistory();
+ if(h.length<4)return;
+
+ const map={
+  "Fed / hungry":"Neh",
+  "Burped":"Eh",
+  "Went to sleep":"Owh",
+  "Wind / poo":"Eairh",
+  "Changed / repositioned":"Heh"
+ };
+
+ h.forEach(item=>{
+  const cls=map[item.outcome];
+  if(!cls||!item.features)return;
+  const x=item.features;
+  const dist=
+   Math.abs(f.rms-x.rms)*8+
+   Math.abs(f.zcr-x.zcr)*5+
+   Math.abs(f.variability-x.variability)*10+
+   Math.abs(f.bursts-x.bursts)*.08;
+  scores[cls]+=Math.max(0,.7-dist);
+ });
+}
+
+function saveOutcome(outcome){
+ const h=getHistory();
+ h.push({
+  date:new Date().toISOString(),
+  guess:currentGuess,
+  outcome,
+  features:currentFeatures
+ });
+ while(h.length>250)h.shift();
+ localStorage.setItem("babyTranslatorHistory",JSON.stringify(h));
+ feedback.innerHTML='<h2>Saved ✓</h2><p>Your feedback has been added to the personal learning history.</p>';
+}
+
+if(!navigator.mediaDevices){
+ statusEl.textContent="Open this app using its secure GitHub Pages address to enable the microphone.";
+}
+</script>
+</body>
+</html>
